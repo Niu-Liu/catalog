@@ -63,7 +63,7 @@ def nor_sep_calc(dRA, dRA_err, dDC, dDC_err, C):
     # Avoid singular
     C = np.where(C == -1, -0.99999, C)
     C = np.where(C == 1, 0.99999, C)
-    X = (X_a**2 + X_d**2 - 2*C*X_a*X_d) / (1-C**2)
+    X = sqrt((X_a**2 + X_d**2 - 2*C*X_a*X_d) / (1-C**2))
 
     return ang_sep, X_a, X_d, X
 
@@ -249,8 +249,8 @@ def pos_diff_err(dra, ddec, dra_err, ddec_err, cov, rho, phi,
     sigma_rho = sqrt(sigma_rho2)
 
     # Calculate the uncertainty of PA
-    term1 = dra ** 2 * ddec_err ** 2
-    term2 = ddec ** 2 * dra_err ** 2
+    term1 = (dra * ddec_err) ** 2
+    term2 = (ddec * dra_err) ** 2
     term3 = 2 * dra * ddec * cov
     sigma_phi2 = (term1 + term2 - term3) / rho ** 4
     sigma_phi = sqrt(sigma_phi2)
@@ -335,8 +335,8 @@ def radio_cat_diff_calc(table1, table2, sou_name="source_name",
     com_sou["dra"] = com_sou["dra"].to(pos_unit)
     com_sou["ddec"] = com_sou["ddec"].to(pos_unit)
 
-    com_sou["dra"].unit = pos_unit
-    com_sou["ddec"].unit = pos_unit
+    # com_sou["dra"].unit = pos_unit
+    # com_sou["ddec"].unit = pos_unit
 
     com_sou["dra_err"].unit = pos_unit
     com_sou["ddec_err"].unit = pos_unit
@@ -357,8 +357,10 @@ def radio_cat_diff_calc(table1, table2, sou_name="source_name",
     eema2, eena2, eepa2 = error_ellipse_calc(ra_err2, dec_err2, ra_dec_cor2)
 
     # Calculate uncertainties for rho and PA
-    ang_sep_err, pa_err = pos_diff_err(dra, ddec, dra_err, ddec_err, cov, ang_sep,
-                                       pay, eema1, eena1, eepa1, eema2, eena2, eepa2)
+    ang_sep_err, pa_err = pos_diff_err(
+        com_sou["dra"], com_sou["ddec"],
+        com_sou["dra_err"], com_sou["ddec_err"], com_sou["dra_ddec_cov"],
+        ang_sep, pay, eema1, eena1, eepa1, eema2, eena2, eepa2)
 
     # Add these columns
     com_sou.add_columns([ang_sep, ang_sep_err, pa, pa_err, X_a, X_d, X],

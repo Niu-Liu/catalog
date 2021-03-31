@@ -16,9 +16,10 @@ import numpy as np
 from .pos_err import error_ellipse_calc
 from .get_dir import get_data_dir
 from .pos_diff import nor_sep_calc
+from .ga_func import gaia_ga_corr
 
 __all__ = ["read_dr1_qso", "read_dr2_iers", "read_dr2_allwise",
-           "read_edr3_agn", "read_edr3_crf", 'read_edr3_icrf_sou']
+           "read_edr3_agn", "read_edr3_crf", "read_edr3_icrf_sou"]
 
 
 # -----------------------------  FUNCTIONS -----------------------------
@@ -218,13 +219,15 @@ def read_dr2_allwise(dr2_qso_file=None):
     return gdr2
 
 
-def read_edr3_agn(edr3_qso_file=None, nor_pm=False):
+def read_edr3_agn(edr3_qso_file=None, calc_nor_pm=False):
     """Read positional information for AGN in Gaia edr3 catalog.
 
     Parameter
     ---------
     edr3_qso_file : string
-        file name and path 
+        file name and path
+    calc_nor_pm: boolean
+        flag to tell if calculate the normalized proper motion
 
     Return
     ------
@@ -258,29 +261,35 @@ def read_edr3_agn(edr3_qso_file=None, nor_pm=False):
 
     # Calculate the normalized proper motion
     # This is a quantity similar to normalized separation
-    if nor_pm:
+    if calc_nor_pm:
         data = nor_sep_calc(gedr3["pmra"], gedr3["pmra_err"],
                             gedr3["pmdec"], gedr3["pmdec_err"], gedr3["pmra_pmdec_corr"])
         nor_pm = Column(data[3], name="nor_pm", unit=None)
         gedr3.add_column(nor_pm)
 
+        # GA-effect correction
+        gedr3 = gaia_ga_corr(gedr3)
+
     return gedr3
 
 
-def read_edr3_crf(edr3_qso_file=None, table_type="all", pos_err_ellipse=False,
-                  nor_pm=False):
+def read_edr3_crf(edr3_qso_file=None, table_type="all", calc_pos_err=False,
+                  calc_nor_pm=False, only_used_sou=False):
     """Read data for Gaia-CRF3 sources in Gaia edr3 catalog.
 
     Parameter
     ---------
     edr3_qso_file : string
-        file name and path 
-    table_type : string 
-        flag to tell if return subset, could be 'all', 'orientation', 'spin'
-    pos_err_ellipse: Boolean
+        file name and path
+    table_type : string
+        flag to tell if return subset, could be "all", "orientation", "spin"
+    calc_pos_err: Boolean
         flag to tell if calculate the position error ellipse parameters
-    nor_pm: boolean
+    calc_nor_pm: boolean
         flag to tell if calculate the normalized proper motion
+    only_used_sou : boolean
+        flag to decide whether to keep only those sources used for calculating
+        the orientation and spin parameters for Gaia-CRF3
 
     Return
     ------
@@ -296,109 +305,72 @@ def read_edr3_crf(edr3_qso_file=None, table_type="all", pos_err_ellipse=False,
     # Read Gaia edr3 quasar data
     gedr3 = Table.read(edr3_qso_file)
 
+    # Rename the column names
+    gedr3.rename_column("ra_error", "ra_err")
+    gedr3.rename_column("dec_error", "dec_err")
+    gedr3.rename_column("parallax_error", "parallax_err")
+    gedr3.rename_column("pmra_error", "pmra_err")
+    gedr3.rename_column("pmdec_error", "pmdec_err")
+
     # Check which subset should be used
     if table_type == "orientation":
-        mask = (gedr3["considered_for_reference_frame_orientation"] == True)
-        gedr3 = gedr3[mask]
-        gedr3.keep_columns(['source_id',
-                            'ra',
-                            'ra_error',
-                            'dec',
-                            'dec_error',
-                            'parallax',
-                            'parallax_error',
-                            'parallax_over_error',
-                            'pm',
-                            'pmra',
-                            'pmra_error',
-                            'pmdec',
-                            'pmdec_error',
-                            'ra_dec_corr',
-                            'ra_parallax_corr',
-                            'ra_pmra_corr',
-                            'ra_pmdec_corr',
-                            'dec_parallax_corr',
-                            'dec_pmra_corr',
-                            'dec_pmdec_corr',
-                            'parallax_pmra_corr',
-                            'parallax_pmdec_corr',
-                            'pmra_pmdec_corr',
-                            'astrometric_n_obs_al',
-                            'astrometric_n_obs_ac',
-                            'astrometric_n_good_obs_al',
-                            'astrometric_n_bad_obs_al',
-                            'astrometric_gof_al',
-                            'astrometric_chi2_al',
-                            'astrometric_excess_noise',
-                            'astrometric_excess_noise_sig',
-                            'nu_eff_used_in_astrometry',
-                            'astrometric_matched_transits',
-                            'visibility_periods_used',
-                            'astrometric_sigma5d_max',
-                            'matched_transits',
-                            'new_matched_transits',
-                            'ruwe',
-                            'scan_direction_strength_k1',
-                            'scan_direction_strength_k2',
-                            'scan_direction_strength_k3',
-                            'scan_direction_strength_k4',
-                            'scan_direction_mean_k1',
-                            'scan_direction_mean_k2',
-                            'scan_direction_mean_k3',
-                            'scan_direction_mean_k4',
-                            'duplicated_source',
-                            'phot_g_mean_mag',
-                            'phot_bp_mean_mag',
-                            'phot_rp_mean_mag',
-                            'bp_rp',
-                            'bp_g',
-                            'g_rp',
-                            'l',
-                            'b',
-                            'ecl_lon',
-                            'ecl_lat',
-                            'used_for_reference_frame_orientation',
-                            'source_name_in_catalogue'])
-        # Rename the column names
-        gedr3.rename_column("ra_error", "ra_err")
-        gedr3.rename_column("dec_error", "dec_err")
-        gedr3.rename_column("parallax_error", "parallax_err")
-        gedr3.rename_column("pmra_error", "pmra_err")
-        gedr3.rename_column("pmdec_error", "pmdec_err")
-
-        # Calculate the semi-major axis of error ellipse for position
-        if pos_err_ellipse:
-            pos_err_max, pos_err_min, pa = error_ellipse_calc(
-                gedr3["ra_err"], gedr3["dec_err"], gedr3["ra_dec_corr"])
-
-            # Add the semi-major axis of error ellipse to the table
-            pos_err_max = Column(pos_err_max, name="pos_err_max", unit=u.mas)
-            pos_err_min = Column(pos_err_min, name="pos_err_min", unit=u.mas)
-            pa = Column(pa, name="eepa", unit=u.deg)
-            gedr3.add_columns([pos_err_max, pos_err_min, pa])
+        if only_used_sou:
+            mask = gedr3["used_for_reference_frame_orientation"]
+        else:
+            mask = gedr3["considered_for_reference_frame_orientation"]
 
     elif table_type == "spin":
-        mask = (gedr3["considered_for_reference_frame_spin"] == True)
-        gedr3 = gedr3[mask]
+        if only_used_sou:
+            mask = gedr3["used_for_reference_frame_spin"]
+        else:
+            mask = gedr3["considered_for_reference_frame_spin"]
 
-        # Calculate the normalized proper motion
-        # This is a quantity similar to normalized separation
-        if nor_pm:
-            data = nor_sep_calc(gedr3["pmra"], gedr3["pmra_err"],
-                                gedr3["pmdec"], gedr3["pmdec_err"],
-                                gedr3["pmra_pmdec_corr"])
-            nor_pm = Column(data[3], name="nor_pm", unit=None)
-            gedr3.add_column(nor_pm)
+    else:
+        if only_used_sou:
+            mask1 = gedr3["used_for_reference_frame_orientation"]
+            mask2 = gedr3["used_for_reference_frame_spin"]
+        else:
+            mask1 = gedr3["considered_for_reference_frame_orientation"]
+            mask2 = gedr3["considered_for_reference_frame_spin"]
+        mask = (mask1 | mask2)
+
+    gedr3 = gedr3[mask]
+
+    # Calculate the normalized proper motion
+    # This is a quantity similar to normalized separation
+    if calc_nor_pm:
+        data = nor_sep_calc(gedr3["pmra"], gedr3["pmra_err"],
+                            gedr3["pmdec"], gedr3["pmdec_err"],
+                            gedr3["pmra_pmdec_corr"])
+        nor_pm = Column(data[3], name="nor_pm", unit=None)
+        gedr3.add_column(nor_pm)
+
+        # GA-effect correction
+        gedr3 = gaia_ga_corr(gedr3)
+
+    # Calculate the semi-major axis of error ellipse for position
+    if calc_pos_err:
+        pos_err_max, pos_err_min, pa = error_ellipse_calc(
+            gedr3["ra_err"], gedr3["dec_err"], gedr3["ra_dec_corr"])
+
+        # Add the semi-major axis of error ellipse to the table
+        pos_err_max = Column(pos_err_max, name="pos_err_max", unit=u.mas)
+        pos_err_min = Column(pos_err_min, name="pos_err_min", unit=u.mas)
+        pa = Column(pa, name="eepa", unit=u.deg)
+        gedr3.add_columns([pos_err_max, pos_err_min, pa])
 
     return gedr3
 
 
-def read_edr3_icrf_sou(pos_err_ellipse=False):
-    """Read data for Gaia-CRF3 sources in Gaia edr3 catalog.
+def read_edr3_icrf_sou(calc_pos_err=False, calc_nor_pm=False):
+    """Read data for ICRF3 sources in Gaia edr3 catalog.
 
     Parameter
     ---------
-    None
+    calc_pos_err: Boolean
+        flag to tell if calculate the position error ellipse parameters
+    calc_nor_pm: boolean
+        flag to tell if calculate the normalized proper motion
 
     Return
     ------
@@ -420,7 +392,7 @@ def read_edr3_icrf_sou(pos_err_ellipse=False):
     gedr3.rename_column("pmra_error", "pmra_err")
     gedr3.rename_column("pmdec_error", "pmdec_err")
 
-    if pos_err_ellipse:
+    if calc_pos_err:
         # Calculate the semi-major axis of error ellipse for position
         pos_err_max, pos_err_min, pa = error_ellipse_calc(
             gedr3["ra_err"], gedr3["dec_err"], gedr3["ra_dec_corr"])
@@ -430,6 +402,18 @@ def read_edr3_icrf_sou(pos_err_ellipse=False):
         pos_err_min = Column(pos_err_min, name="pos_err_min", unit=u.mas)
         pa = Column(pa, name="eepa", unit=u.deg)
         gedr3.add_columns([pos_err_max, pos_err_min, pa])
+
+    # Calculate the normalized proper motion
+    # This is a quantity similar to normalized separation
+    if calc_nor_pm:
+        data = nor_sep_calc(gedr3["pmra"], gedr3["pmra_err"],
+                            gedr3["pmdec"], gedr3["pmdec_err"],
+                            gedr3["pmra_pmdec_corr"])
+        nor_pm = Column(data[3], name="nor_pm", unit=None)
+        gedr3.add_column(nor_pm)
+
+        # GA-effect correction
+        gedr3 = gaia_ga_corr(gedr3)
 
     return gedr3
 
