@@ -7,10 +7,12 @@ Created on Wed Mar 31 10:41:20 2021
 @author: Neo(niu.liu@nju.edu.cn)
 """
 
+import numpy as np
+from numpy import sin, cos
+
 from .vsh_deg1_cor import vsh_deg01_fitting
 from .glide_calc import glide_gen, glide_field_gen, glide_calc
-from .pos_diff import nor_sep_calc
-import numpy as np
+from .pos_diff import nor_pm_calc
 
 
 # -----------------------------  FUNCTIONS -----------------------------
@@ -176,8 +178,8 @@ def glide_apex_calc(gv, err_gv=None):
         return g, RAdeg, DCdeg, errA, errRA, errDC
 
 
-def GA_glide_decomposed(gv, err_gv):
-    """Given a glide vector, get the GA component and non-GA component.
+def ga_glide_decomposed(gv, err_gv):
+    """Given a glide vector, get the ga component and non-ga component.
 
 
     "G" stands for amplitude while "g" for vector
@@ -191,24 +193,24 @@ def GA_glide_decomposed(gv, err_gv):
 
     Returns
     ----------
-    G_GA/err_GA : amplitude and its uncertainty of GA component
-    g_NonGA : non-GA glide component
+    G_ga/err_ga : amplitude and its uncertainty of ga component
+    g_nga : non-ga glide component
     """
 
-    GA_hat = glide_gen(1.0, 266.4, -28.9)
+    ga_hat = glide_gen(1.0, 266.4, -28.9)
 
-    # GA component
-    G_GA = np.dot(gv, GA_hat)
-    errG_GA = np.dot(err_gv, GA_hat)
+    # ga component
+    G_ga = np.dot(gv, ga_hat)
+    errG_ga = np.dot(err_gv, ga_hat)
 
-    # non-GA component
-    g_NonGA = gv - G_GA * GA_hat
-    err_NonGA = err_gv - errG_GA * GA_hat
-    [G_NonGA, RA_NonGA, DC_NonGA,
-     errG_NonGA, errRA_NonGA, errDC_NonGA] = glide_apex_calc(g_NonGA, err_NonGA)
+    # non-ga component
+    g_nga = gv - G_ga * ga_hat
+    err_nga = err_gv - errG_ga * ga_hat
+    [G_nga, RA_nga, DC_nga,
+     errG_nga, errRA_nga, errDC_nga] = glide_apex_calc(g_nga, err_nga)
 
-    return [G_GA, errG_GA, G_NonGA, RA_NonGA, DC_NonGA,
-            errG_NonGA, errRA_NonGA, errDC_NonGA]
+    return [G_ga, errG_ga, G_nga, RA_nga, DC_nga,
+            errG_nga, errRA_nga, errDC_nga]
 
 
 def rotation_from_ga(cat):
@@ -286,10 +288,11 @@ def gaia_ga_corr(gaia_sou, gv=None, table="edr3"):
         gaia_sou["ra"]), np.deg2rad(gaia_sou["dec"]))
 
     # Calculate normalized proper motion
-    nor_pm_cor = nor_sep_calc(gaia_sou["pmra"]-pmra0, gaia_sou["pmra_err"],
-                              gaia_sou["pmdec"] -
-                              pmdec0, gaia_sou["pmdec_err"],
-                              gaia_sou["pmra_pmdec_corr"])
+    nor_pm_cor = nor_pm_calc(gaia_sou["pmra"]-pmra0, gaia_sou["pmra_err"],
+                             gaia_sou["pmdec"] -
+                             pmdec0, gaia_sou["pmdec_err"],
+                             gaia_sou["pmra_pmdec_corr"])
+
     gaia_sou.add_column(nor_pm_cor, name="nor_pm_cor")
 
     return gaia_sou

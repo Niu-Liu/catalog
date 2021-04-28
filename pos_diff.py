@@ -19,10 +19,39 @@ from .pos_err import error_ellipse_calc
 
 
 __all__ = ["nor_sep_calc", "pos_diff_calc", "pa_calc",
-           "radio_cat_diff_calc", ]
+           "radio_cat_diff_calc", "nor_pm_calc"]
 
 
 # -----------------------------  FUNCTIONS -----------------------------
+def nor_pm_calc(pmra, pmra_err, pmdec, pmdec_err, pm_ra_dec_cor):
+    """pm_ra_dec_coralculate the normalized seperation.
+
+    Parameters
+    ----------
+    pmra/pmdec : proper motion in Right Ascension / Declination
+    pmra_err/pmdec_err : formal uncertainty of pmra*cos(Dec)/pmdec
+    pm_ra_dec_cor : correlation coeffient between pmra*cos(Dec) and pmdec.
+
+    Returns
+    ----------
+    X : Normalized proper motion, unit-less.
+    """
+
+    # Normalised coordinate difference
+    X_a = pmra / pmra_err
+    X_d = pmdec / pmdec_err
+
+    # Normalised separation - Mignard's statistics (considering covariance)
+    # Now I will use the explict expression
+    # Avoid singular
+    pm_ra_dec_cor = np.where(pm_ra_dec_cor == -1, -0.99999, pm_ra_dec_cor)
+    pm_ra_dec_cor = np.where(pm_ra_dec_cor == 1, 0.99999, pm_ra_dec_cor)
+    X2 = (X_a**2 + X_d**2 - 2*pm_ra_dec_cor*X_a*X_d) / (1-pm_ra_dec_cor**2)
+    X = np.sqrt(X2)
+
+    return X
+
+
 def nor_sep_calc(dRA, dRA_err, dDC, dDC_err, C):
     """Calculate the normalized seperation.
 
@@ -47,7 +76,7 @@ def nor_sep_calc(dRA, dRA_err, dDC, dDC_err, C):
     X_a = dRA / dRA_err
     X_d = dDC / dDC_err
 
-    # Normalised separation - Mignard"s statistics (considering covariance)
+    # Normalised separation - Mignard's statistics (considering covariance)
 #     X = np.zeros_like(X_a)
 #
 #     for i, (X_ai, X_di, Ci) in enumerate(zip(X_a, X_d, C)):

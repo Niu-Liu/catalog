@@ -8,12 +8,14 @@ Positional transformation.
 @author: Neo
 
 Oct 29, 2018: re-write all the codes
+Apr 19, 2021: use 'curve_fit' to do the lsq fitting
 """
 
+from scipy.optimize import curve_fit
 import numpy as np
 from numpy import sin, cos, pi, concatenate
 # My modules
-from .cov_mat import calc_wgt_mat, read_cov_mat
+# from .cov_mat import calc_wgt_mat, read_cov_mat
 from .stats_calc import calc_chi2_2d, calc_gof
 
 
@@ -21,9 +23,26 @@ __all__ = ["tran_fitting1", "tran_fitting2",
            "tran_fitting3", "tran_fitting3_0"]
 
 
-##################  IESR transformation version 01 ##################
-def tran_func1(ra, dec, r1, r2, r3):
-    """Coordinate transformation function.
+# ###################### IERS Transformation Functions ######################
+def rotation1(X, **kwargs):
+    """A sample code
+
+    Parameters
+    ----------
+    x : 1-D array
+        (ra, dec) in radian
+    """
+
+    ra, dec = X
+    dra = -locals["r1"] * cos(ra) * sin(dec) - locals["r2"] * sin(ra) * sin(dec) + \
+        locals["r3"] * cos(dec)
+    ddec = + locals["r1"] * sin(ra) - locals["r2"] * cos(ra)
+
+    return np.concatenate((dra, ddec))
+
+
+def tran_func1(pos, rx, ry, rz):
+    """IERS Coordinate transformation function version 01.
 
     The transformation function considering onl the rigid rotation
     is given by
@@ -34,7 +53,7 @@ def tran_func1(ra, dec, r1, r2, r3):
     ----------
     ra/dec : array of float
         right ascension/declination in radian
-    r1/r2/r3 : float
+    rx/ry/rz : float
         rotational angles around X-, Y-, and Z-axis
 
     Returns
@@ -43,141 +62,167 @@ def tran_func1(ra, dec, r1, r2, r3):
         R.A.(*cos(Dec.))/Dec. differences
     """
 
-    dra = -r1 * cos(ra) * sin(dec) - r2 * sin(ra) * sin(dec) + r3 * cos(dec)
-    ddec = r1 * sin(ra) - r2 * cos(ra)
+    ra, dec = pos
 
-    return dra, ddec
+    dra = -rx * cos(ra) * sin(dec) - ry * sin(ra) * sin(dec) + rz * cos(dec)
+    ddec = rx * sin(ra) - ry * cos(ra)
+    dpos = np.concatenate((dra, ddec))
+
+    return dpos
 
 
-def jac_mat1(ra, dec):
-    """Calculate the Jacobian matrix.
+def tran_func2(pos, rx, ry, rz, dz):
+    """IERS Coordinate transformation function version 02.
 
-    The transformation function considering onl the rigid rotation
-    is given by
+    The transformation equation considers a rigid rotation together with
+    one declination bias, which could be given by the following
     d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra) - r_y*cos(ra)
+    d_DE   = +r_x*sin(ra)          - r_y*cos(ra) + dz
 
     Parameters
     ----------
-    ra : array of float
-        right ascension in radian
-    dec : array of float
-        declination in radian
-
-    Returns
-    -------
-    jac_mat : Jacobian matrix
-    """
-
-    # Partial array dra and ddec, respectively.
-    parx1 = -sin(dec)*cos(ra)
-    parx2 = sin(ra)
-    pary1 = -sin(dec)*sin(ra)
-    pary2 = -cos(ra)
-    parz1 = cos(dec)
-    parz2 = np.zeros_like(dec)
-
-    # (dra, ddec).
-    parx = concatenate((parx1, parx2))
-    pary = concatenate((pary1, pary2))
-    parz = concatenate((parz1, parz2))
-
-    # Jacobian matrix.
-    jac_mat = np.stack((parx, pary, parz), axis=-1)
-
-    return jac_mat
-
-
-def solve_tran_neq1(dra, ddec, ra, dec,
-                    dra_err=None, ddec_err=None, corr=None):
-    """Solve normal equation.
-
-    The transformation function considering onl the rigid rotation
-    is given by
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra) - r_y*cos(ra)
-
-    Parameters
-    ----------
-    dra/ddec : array of float
-        offset in right ascension/declination
     ra/dec : array of float
         right ascension/declination in radian
-    dra_err/ddec_err : array of float
-        formal uncertainties of dra/ddec, default value is None
-    corr : array of float
-        correlation between dra and ddec, default value is None
+    rx/ry/rz : float
+        rotational angles around X-, Y-, and Z-axis
+    dz : float
+        bias in declination
 
     Returns
     -------
-    w : array of (3,)
-        estimation of three rotational angles
-    sig : array of (3,)
-        formal uncertainty of estimations
-    corr_mat : array of (3,3)
-        correlation coefficients between estimations
+    dra/ddec : array of float
+        R.A.(*cos(Dec.))/Dec. differences
     """
 
-    # Jacobian matrix and its transpose.
-    jac_mat = jac_mat1(ra, dec)
-    jac_mat_t = np.transpose(jac_mat)
+    ra, dec = pos
 
-    # Weighted matrix.
-    wgt_mat = calc_wgt_mat(dra_err, ddec_err, corr)
+    dra = [-rx * cos(ra) * sin(dec) - ry *
+           sin(ra) * sin(dec) + rz * cos(dec)][0]
+    ddec = [rx * sin(ra) - ry * cos(ra) + dz][0]
+    dpos = np.concatenate((dra, ddec))
 
-    # Calculate matrix A and b of matrix equation:
-    # A * w = b.
-    mat_tmp = np.dot(jac_mat_t, wgt_mat)
-    A = np.dot(mat_tmp, jac_mat)
-    dpos = concatenate((dra, ddec))
-    b = np.dot(mat_tmp,  dpos)
-
-    # Solve the equations.
-    #  w = (r_x, r_y, r_z)^T
-    w = np.linalg.solve(A, b)
-
-    # Covariance.
-    cov_mat = np.linalg.inv(A)
-    sig, corr_mat = read_cov_mat(cov_mat)
-
-    # Return the result.
-    return w, sig, corr_mat
+    return dpos
 
 
-def residual_calc1(dRA, dDE, RA, DE, param):
-    '''Calculate the residuals of RA/Dec
+def tran_func3a(pos, rx, ry, rz, d1, d2, b2):
+    """IERS Coordinate transformation function version 03(a).
 
-    The transformation function considering onl the rigid rotation
-    is given by
+    The transformation equation considers a rigid rotation together with
+    two declination-dependent slopes and one declination bias, which could
+    be given by the following
     d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra) - r_y*cos(ra)
+             + D_1*(dec-DE0)*cos(dec)
+    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
+             + D_2*(dec-DE0) + B_2
+    where the reference declination is choosen as DE0 = 0.0.
+
+    Parameters ----------
+    ra/dec : array of float right ascension/declination in radian
+    rx/ry/rz : float rotational angles around X-, Y-, and Z-axis
+    d1/d2 : float
+        two declination-dependent slopes in right ascension/declination
+    b2 : float
+        one bias in declination
+
+    Returns
+    -------
+    dra/ddec : array of float
+        R.A.(*cos(Dec.))/Dec. differences
+    """
+
+    ra, dec = pos
+    dec0 = 0
+    delta_dec = dec - dec0
+
+    dra = [-rx * cos(ra) * sin(dec) - ry *
+           sin(ra) * sin(dec) + rz * cos(dec)
+           + d1 * delta_dec * cos(dec)][0]
+    ddec = [rx * sin(ra) - ry * cos(ra)
+            + d2 * delta_dec + b2][0]
+    dpos = np.concatenate((dra, ddec))
+
+    return dpos
+
+
+def tran_func3b(pos, rx, ry, rz, d1, d2, b2):
+    """IERS Coordinate transformation function version 03(b).
+
+    The transformation equation considers a rigid rotation together with
+    two declination-dependent slopes and one declination bias, which could
+    be given by the following
+    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
+             + D_1*(dec-DE0)
+    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
+             + D_2*(dec-DE0) + B_2
+    where the reference declination is choosen as DE0 = 0.0.
+    The difference between v03 and v03-00 is the defination of the slope
+    in the right ascension.
 
     Parameters
     ----------
-    dRA/dDE : array of float
-        differences in R.A.(*cos(Dec.))/Dec.
-    RA/DE : array of float
-        Right ascension/Declination in radian
-    param : array of float
-        estimation of three rotation angles
+    ra/dec : array of float
+        right ascension/declination in radian
+    rx/ry/rz : float
+        rotational angles around X-, Y-, and Z-axis
+    d1/d2 : float
+        two declination-dependent slopes in right ascension/declination
+    b2 : float
+        one bias in declination
 
     Returns
-    ----------
-    ResRA/ResDE : array of float
-        residual array of dRA(*cos(Dec))/dDec in uas.
-    '''
+    -------
+    dra/ddec : array of float
+        R.A.(*cos(Dec.))/Dec. differences
+    """
 
-    # Theoritical value
-    dra, ddec = tran_func1(RA, DE, *param)
+    ra, dec = pos
+    dec0 = 0
+    delta_dec = dec - dec0
 
-    # Calculate the residual. ( O - C )
-    ResRA, ResDE = dRA - dra, dDE - ddec
+    dra = [-rx * cos(ra) * sin(dec) - ry *
+           sin(ra) * sin(dec) + rz * cos(dec)
+           + d1 * delta_dec][0]
+    ddec = [rx * sin(ra) - ry * cos(ra)
+            + d2 * delta_dec + b2][0]
+    dpos = np.concatenate((dra, ddec))
 
-    return ResRA, ResDE
+    return dpos
 
 
-def tran_fitting1(dra, ddec, ra, dec,
-                  dra_err=None, ddec_err=None, corr_arr=None, flog=sys.stdout):
+# ############################ Resolve Results ############################
+def resolve_result(popt, pcov, tran_type):
+    """Resolve the result
+
+    """
+
+    res = {}
+
+    if tran_type == "1":
+        para_name = ["rx", "ry", "rz"]
+    elif tran_type == "2":
+        para_name = ["rx", "ry", "rz", "dz"]
+    elif tran_type in ["3", "3a", "3b"]:
+        para_name = ["rx", "ry", "rz", "d1", "d2", "dz"]
+    else:
+        print("Undefined tran_type")
+        os.system(1)
+
+    for i, par in enumerate(para_name):
+        res[par] = popt[i]
+        res[par+"_err"] = np.sqrt(pcov[i, i])
+
+    for i, pari in enumerate(para_name):
+        for j, parj in enumerate(para_name[i+1:]):
+            res[pari+parj+"_cor"] = pcov[i, j] / \
+                res[pari+"_err"] / res[parj+"_err"]
+
+    return res
+
+
+# ################################ LSQ fitting ################################
+def iers_tran_fitting(dra, ddec, ra, dec,
+                      dra_err=None, ddec_err=None, corr_arr=None, flog=sys.stdout,
+                      unit_deg=True, tran_type="1"):
     """Least square fitting of transformation equation.
 
     The transformation function considering onl the rigid rotation
@@ -206,788 +251,94 @@ def tran_fitting1(dra, ddec, ra, dec,
         correlation coefficients between estimations
     """
 
-    opt, sig, corr_mat = solve_tran_neq1(
-        dra, ddec, ra, dec, dra_err, ddec_err, corr_arr)
+    # Degree -> radian
+    if unit_deg:
+        ra = np.deg2rad(ra)
+        dec = np.deg2rad(dec)
 
-    # Calculate the residual. ( O - C )
-    rsd_ra, rsd_dec = residual_calc1(dRA, dDE, RA, DE, opt)
+    # Position vector
+    pos = np.concatenate((ra, dec))
+    dpos = np.concatenate((dra, ddec))
+    N = len(dra)
 
-    if dra_err is None and ddec_err is None:
-        # Calculate the a priori reduced Chi-square
-        cov_arr = corr_arr * dra_err * ddec_err
-        apr_chi2 = calc_chi2_2d(
-            dra, dra_err, ddec, ddec_err, cov_arr, reduced=True)
+    # Create covariance matrix
+    if dra_err is not None:
+        cov_mat = np.diag(np.concatenate((dra_err ** 2, ddec_err**2)))
 
-        # Calculate the post-fitting reduced Chi-square
-        M = opt.size
+        if dra_ddec_cor is not None:
+            # Consider the correlation between dra and ddec
+            dra_ddec_cov = dra_err * ddec_err * dra_ddec_cor
+            for i, dra_ddec_covi in enumerate(dra_ddec_cov):
+                cov_mat[i, i+N] = dra_ddec_covi
+                cov_mat[i+N, i] = dra_ddec_covi
+
+    # Do the LSQ fit
+    if tran_type == "1":
+        trans_func = tran_func1
+    elif tran_type == "2":
+        trans_func = tran_func2
+    elif tran_type == "3a":
+        trans_func = tran_func3a
+    elif tran_type in ["3", "3b"]:
+        trans_func = tran_func3b
+    else:
+        print("Undefined tran_type!")
+        os.system(1)
+
+    if dra_err is None:
+        popt, pcov = curve_fit(trans_func, pos, dpos)
+    else:
+        popt, pcov = curve_fit(trans_func, pos, dpos,
+                               sigma=cov_mat, absolute_sigma=False)
+
+    M = len(popt)
+    res = resolve_result(popt, pcov, tran_type)
+
+    # Prediction
+    predict = trans_func(pos, *popt)
+    res["predict_ra"] = predict[:N]
+    res["predict_dec"] = predict[N:]
+
+    # Residual
+    res["residual_ra"] = dra - res["predict_ra"]
+    res["residual_dec"] = ddec - res["predict_dec"]
+    rsd_ra, rsd_ddec = res["residual_ra"], res["residual_dec"]
+
+    # Chi squared per dof
+    if dra_err is None:
+        # Calculate chi2/ndof
+        res["chi2_dof_ra"] = np.sum(res["residual_ra"]) / (N - M)
+        res["chi2_dof_dec"] = np.sum(res["residual_dec"]) / (N - M)
+
+        unit_wgt = np.ones_like(dra)
+        zero_cov = np.zeros_like(dra)
+        apr_chi2_rdc = calc_chi2_2d(dra, unit_wgt, ddec, unit_wgt, zero_cov,
+                                    reduced=True, num_fdm=2*N-1-M)
+        pos_chi2_rdc = calc_chi2_2d(dra, unit_wgt, ddec, unit_wgt, zero_cov,
+                                    reduced=True, num_fdm=2*N-1-M)
+        pos_chi2 = calc_chi2_2d(dra, unit_wgt, ddec, unit_wgt, zero_cov)
+
+    else:
+        # Calculate chi2/ndof
+        res["chi2_dof_ra"] = np.sum(res["residual_ra"] / dra_err) / (N - M)
+        res["chi2_dof_dec"] = np.sum(res["residual_dec"] / ddec_err) / (N - M)
+
+        apr_chi2_rdc = calc_chi2_2d(dra, dra_err, ddec, ddec_err, dra_ddec_cov,
+                                    reduced=True, num_fdm=2*N-1-M)
         pos_chi2_rdc = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err,
-                                    cov_arr, reduced=True,
-                                    num_fdm=2*rsd_ra.size-1-M)
+                                    dra_ddec_cov, reduced=True, num_fdm=2*N-1-M)
 
-        print("# apriori reduced Chi-square for: %10.3f\n"
-              "# posteriori reduced Chi-square for: %10.3f" %
-              (apr_chi2, pos_chi2_rdc), file=flog)
+        pos_chi2 = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err, dra_ddec_cov)
 
-        # Calculate the goodness-of-fit
-        pos_chi2 = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err, cov_arr)
-        print("# goodness-of-fit is %10.3f" %
-              calc_gof(2*rsd_ra.size-1-M, pos_chi2), file=flog)
+    print("# apriori reduced Chi-square for: %10.3f\n"
+          "# posteriori reduced Chi-square for: %10.3f" %
+          (apr_chi2_rdc, pos_chi2_rdc), file=flog)
 
-        # Rescale the formal errors
-        sig = sig * np.sqrt(pos_chi2_rdc)
+    # Calculate the goodness-of-fit
+    print("# goodness-of-fit is %10.3f" %
+          calc_gof(2*N-1-M, pos_chi2), file=flog)
 
-    return opt, sig, corr_mat
-
-
-##################  IESR transformation version 03 ##################
-def tran_func2(ra, dec, r1, r2, r3, dz):
-    """Coordinate transformation function.
-
-    The transformation equation considers a rigid rotation together with
-    one declination bias, which could be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra)          - r_y*cos(ra) + dz
-
-    Parameters
-    ----------
-    ra/dec : array of float
-        right ascension/declination in radian
-    r1/r2/r3 : float
-        rotational angles around X-, Y-, and Z-axis
-    dz : float
-        bias in declination
-
-    Returns
-    -------
-    dra/ddec : array of float
-        R.A.(*cos(Dec.))/Dec. differences
-    """
-
-    dra = [-r1 * cos(ra) * sin(dec) - r2 *
-           sin(ra) * sin(dec) + r3 * cos(dec)][0]
-    ddec = [r1 * sin(ra) - r2 * cos(ra) + dz][0]
-
-    return dra, ddec
-
-
-def jac_mat2(ra, dec):
-    """Calculate the Jacobian matrix.
-
-    The transformation equation considers a rigid rotation together with
-    one declination bias, which could be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra)          - r_y*cos(ra) + dz
-
-    Parameters
-    ----------
-    ra : array of float
-        right ascension in radian
-    dec : array of float
-        declination in radian
-
-    Returns
-    -------
-    jac_mat : Jacobian matrix
-    """
-
-    # Partial deviation of dra and ddec.
-    par11 = -sin(dec) * cos(ra)
-    par12 = sin(ra)
-    par21 = -sin(dec) * sin(ra)
-    par22 = -cos(ra)
-    par31 = cos(dec)
-    par32 = np.zeros_like(dec)
-    par41 = np.rad2deg(dec)  # unit: deg
-    par42 = np.zeros_like(dec)
-    par51 = np.zeros_like(dec)
-    par52 = np.rad2deg(dec)  # unit: deg
-    par61 = np.zeros_like(dec)
-    par62 = np.ones_like(dec)
-
-    par1 = concatenate((par11, par12))
-    par2 = concatenate((par21, par22))
-    par3 = concatenate((par31, par32))
-    par4 = concatenate((par41, par42))
-    par5 = concatenate((par51, par52))
-    par6 = concatenate((par61, par62))
-
-    # Jacobian matrix.
-    jac_mat = np.stack((par1, par2, par3, par4, par5, par6), axis=-1)
-
-    return jac_mat
-
-
-def solve_tran_neq2(dra, ddec, ra, dec,
-                    dra_err=None, ddec_err=None, corr=None):
-    """Solve normal equation.
-
-    The transformation equation considers a rigid rotation together with
-    one declination bias, which could be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra)          - r_y*cos(ra) + dz
-
-    Parameters
-    ----------
-    dra/ddec : array of float
-        offset in right ascension/declination
-    ra/dec : array of float
-        right ascension/declination in radian
-    dra_err/ddec_err : array of float
-        formal uncertainties of dra/ddec, default value is None
-    corr : array of float
-        correlation between dra and ddec, default value is None
-
-    Returns
-    -------
-    opt : array of (4,)
-        estimation of three rotational angles and one bias
-    sig : array of (4,)
-        formal uncertainty of estimations
-    corr_mat : array of (4,4)
-        correlation coefficients between estimations
-    """
-
-    # Jacobian matrix and its transpose.
-    jac_mat = jac_mat2(ra, dec)
-    jac_mat_t = np.transpose(jac_mat)
-
-    # Weighted matrix.
-    wgt_mat = calc_wgt_mat(dra_err, ddec_err, corr)
-
-    # Calculate matrix A and b of matrix equation:
-    # A * w = b.
-    mat_tmp = np.dot(jac_mat_t, wgt_mat)
-    A = np.dot(mat_tmp, jac_mat)
-    dpos = concatenate((dra, ddec))
-    b = np.dot(mat_tmp,  dpos)
-
-    # Solve the equations.
-    #  w = (r1, r2, r3, dz)^T
-    w = np.linalg.solve(A, b)
-
-    # Covariance.
-    cov_mat = np.linalg.inv(A)
-    sig, corr_mat = read_cov_mat(cov_mat)
-
-    # Return the result.
-    return w, sig, corr_mat
-
-
-def residual_calc2(dRA, dDE, RA, DE, param):
-    '''Calculate the residuals of RA/Dec
-
-    The transformation equation considers a rigid rotation together with
-    one declination bias, which could be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra)          - r_y*cos(ra) + dz
-
-    Parameters
-    ----------
-    dRA/dDE : array of float
-        differences in R.A.(*cos(Dec.))/Dec.
-    RA/DE : array of float
-        Right ascension/Declination in radian
-    param : array of float
-        estimation of three rotation angles and one bias
-
-    Returns
-    ----------
-    ResRA/ResDE : array of float
-        residual array of dRA(*cos(Dec))/dDec in uas.
-    '''
-
-    # Theoritical value
-    dra, ddec = tran_func2(RA, DE, *param)
-
-    # Calculate the residual. ( O - C )
-    ResRA, ResDE = dRA - dra, dDE - ddec
-
-    return ResRA, ResDE
-
-
-def tran_fitting2(dra, ddec, ra, dec,
-                  dra_err=None, ddec_err=None, corr_arr=None, flog=sys.stdout):
-    """Least square fitting of transformation equation.
-
-    The transformation equation considers a rigid rotation together with
-    one declination bias, which could be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-    d_DE   = +r_x*sin(ra)          - r_y*cos(ra) + dz
-
-    Parameters
-    ----------
-    dra/ddec : array of float
-        offset in right ascension/declination
-    ra/dec : array of float
-        right ascension/declination in radian
-    dra_err/ddec_err : array of float
-        formal uncertainties of dra/ddec, default value is None
-    corr_arr : array of float
-        correlation between dra and ddec, default value is None
-
-    Returns
-    -------
-    opt : array of (4,)
-        estimation of three rotational angles and one bias
-    sig : array of (4,)
-        formal uncertainty of estimations
-    corr_mat : array of (4,4)
-        correlation coefficients between estimations
-    """
-
-    opt, sig, corr_mat = solve_tran_neq2(
-        dra, ddec, ra, dec, dra_err, ddec_err, corr_arr)
-
-    # Calculate the residual. ( O - C )
-    rsd_ra, rsd_dec = residual_calc2(dRA, dDE, RA, DE, opt)
-
-    if dra_err is None and ddec_err is None:
-        # Calculate the a priori reduced Chi-square
-        cov_arr = corr_arr * dra_err * ddec_err
-        apr_chi2 = calc_chi2_2d(
-            dra, dra_err, ddec, ddec_err, cov_arr, reduced=True)
-
-        # Calculate the post-fitting reduced Chi-square
-        M = opt.size
-        pos_chi2_rdc = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err,
-                                    cov_arr, reduced=True,
-                                    num_fdm=2*rsd_ra.size-1-M)
-
-        print("# apriori reduced Chi-square for: %10.3f\n"
-              "# posteriori reduced Chi-square for: %10.3f" %
-              (apr_chi2, pos_chi2_rdc), file=flog)
-
-        # Calculate the goodness-of-fit
-        pos_chi2 = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err, cov_arr)
-        print("# goodness-of-fit is %10.3f" %
-              calc_gof(2*rsd_ra.size-1-M, pos_chi2), file=flog)
-
-        # Rescale the formal errors
-        sig = sig * np.sqrt(pos_chi2_rdc)
-
-    return opt, sig, corr_mat
-
-
-##################  IESR transformation version 03-00 ##################
-def tran_func3_0(ra, dec, r1, r2, r3, d1, d2, b2):
-    """Coordinate transformation function.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)*cos(dec)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-
-    Parameters
-    ----------
-    ra/dec : array of float
-        right ascension/declination in radian
-    r1/r2/r3 : float
-        rotational angles around X-, Y-, and Z-axis
-    d1/d2 : float
-        two declination-dependent slopes in right ascension/declination
-    b2 : float
-        one bias in declination
-
-    Returns
-    -------
-    dra/ddec : array of float
-        R.A.(*cos(Dec.))/Dec. differences
-    """
-
-    dec0 = 0
-    delta_dec = dec - dec0
-
-    dra = [-r1 * cos(ra) * sin(dec) - r2 *
-           sin(ra) * sin(dec) + r3 * cos(dec)
-           + d1 * delta_dec * cos(dec)][0]
-    ddec = [r1 * sin(ra) - r2 * cos(ra)
-            + d2 * delta_dec + b2][0]
-
-    return dra, ddec
-
-
-def jac_mat3_0(ra, dec):
-    """Calculate the Jacobian matrix.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)*cos(dec)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-
-    Parameters
-    ----------
-    ra : array of float
-        right ascension in radian
-    dec : array of float
-        declination in radian
-
-    Returns
-    -------
-    jac_mat : Jacobian matrix
-    """
-
-    # Partial deviation of dra and ddec.
-    par11 = -sin(dec) * cos(ra)
-    par12 = sin(ra)
-    par21 = -sin(dec) * sin(ra)
-    par22 = -cos(ra)
-    par31 = cos(dec)
-    par32 = np.zeros_like(dec)
-    par41 = np.rad2deg(dec) * cos(dec)  # unit: deg
-    par42 = np.zeros_like(dec)
-    par51 = np.zeros_like(dec)
-    par52 = np.rad2deg(dec)  # unit: deg
-    par61 = np.zeros_like(dec)
-    par62 = np.ones_like(dec)
-
-    par1 = concatenate((par11, par12))
-    par2 = concatenate((par21, par22))
-    par3 = concatenate((par31, par32))
-    par4 = concatenate((par41, par42))
-    par5 = concatenate((par51, par52))
-    par6 = concatenate((par61, par62))
-
-    # Jacobian matrix.
-    jac_mat = np.stack((par1, par2, par3, par4, par5, par6), axis=-1)
-
-    return jac_mat
-
-
-def solve_tran_neq3_0(dra, ddec, ra, dec,
-                      dra_err=None, ddec_err=None, corr=None):
-    """Solve normal equation.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)*cos(dec)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-
-    Parameters
-    ----------
-    dra/ddec : array of float
-        offset in right ascension/declination
-    ra/dec : array of float
-        right ascension/declination in radian
-    dra_err/ddec_err : array of float
-        formal uncertainties of dra/ddec, default value is None
-    corr : array of float
-        correlation between dra and ddec, default value is None
-
-    Returns
-    -------
-    opt : array of (6,)
-        estimation of three rotational angles, two slopes, and one bias
-    sig : array of (6,)
-        formal uncertainty of estimations
-    corr_mat : array of (6,6)
-        correlation coefficients between estimations
-    """
-
-    # Jacobian matrix and its transpose.
-    jac_mat = jac_mat3_0(ra, dec)
-    jac_mat_t = np.transpose(jac_mat)
-
-    # Weighted matrix.
-    wgt_mat = calc_wgt_mat(dra_err, ddec_err, corr)
-
-    # Calculate matrix A and b of matrix equation:
-    # A * w = b.
-    mat_tmp = np.dot(jac_mat_t, wgt_mat)
-    A = np.dot(mat_tmp, jac_mat)
-    dpos = concatenate((dra, ddec))
-    b = np.dot(mat_tmp,  dpos)
-
-    # Solve the equations.
-    #  w = (r_x, r_y, r_z, D_1, D_2, B_2)^T
-    opt = np.linalg.solve(A, b)
-
-    # Covariance.
-    cov_mat = np.linalg.inv(A)
-    sig, corr_mat = read_cov_mat(cov_mat)
-
-    # Return the result.
-    return opt, sig, corr_mat
-
-
-def residual_calc3_0(dRA, dDE, RA, DE, param):
-    '''Calculate the residuals of RA/Dec
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)*cos(dec)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-
-    Parameters
-    ----------
-    dRA/dDE : array of float
-        differences in R.A.(*cos(Dec.))/Dec.
-    RA/DE : array of float
-        Right ascension/Declination in radian
-    param : array of float
-        estimation of three rotation angles, two solpes, and one bias.
-
-    Returns
-    ----------
-    ResRA/ResDE : array of float
-        residual array of dRA(*cos(Dec))/dDec in uas.
-    '''
-
-    # Theoritical value
-    dra, ddec = tran_func3_0(RA, DE, *param)
-
-    # Calculate the residual. ( O - C )
-    ResRA, ResDE = dRA - dra, dDE - ddec
-
-    return ResRA, ResDE
-
-
-def tran_fitting3_0(dra, ddec, ra, dec,
-                    dra_err=None, ddec_err=None, corr_arr=None, flog=sys.stdout):
-    """Least square fitting of transformation equation.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)*cos(dec)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-
-    Parameters
-    ----------
-    dra/ddec : array of float
-        offset in right ascension/declination
-    ra/dec : array of float
-        right ascension/declination in radian
-    dra_err/ddec_err : array of float
-        formal uncertainties of dra/ddec, default value is None
-    corr_arr : array of float
-        correlation between dra and ddec, default value is None
-
-    Returns
-    -------
-    opt : array of (6,)
-        estimation of three rotational angles, two slopes, and one bias
-    sig : array of (6,)
-        formal uncertainty of estimations
-    corr_mat : array of (6,6)
-        correlation coefficients between estimations
-    """
-
-    opt, sig, corr_mat = solve_tran_neq3_0(
-        dra, ddec, ra, dec, dra_err, ddec_err, corr_arr)
-
-    # Calculate the residual. ( O - C )
-    rsd_ra, rsd_dec = residual_calc3_0(dRA, dDE, RA, DE, opt)
-
-    if dra_err is None and ddec_err is None:
-        # Calculate the a priori reduced Chi-square
-        cov_arr = corr_arr * dra_err * ddec_err
-        apr_chi2 = calc_chi2_2d(
-            dra, dra_err, ddec, ddec_err, cov_arr, reduced=True)
-
-        # Calculate the post-fitting reduced Chi-square
-        M = opt.size
-        pos_chi2_rdc = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err,
-                                    cov_arr, reduced=True,
-                                    num_fdm=2*rsd_ra.size-1-M)
-
-        print("# apriori reduced Chi-square for: %10.3f\n"
-              "# posteriori reduced Chi-square for: %10.3f" %
-              (apr_chi2, pos_chi2_rdc), file=flog)
-
-        # Calculate the goodness-of-fit
-        pos_chi2 = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err, cov_arr)
-        print("# goodness-of-fit is %10.3f" %
-              calc_gof(2*rsd_ra.size-1-M, pos_chi2), file=flog)
-
-        # Rescale the formal errors
-        sig = sig * np.sqrt(pos_chi2_rdc)
-
-    return opt, sig, corr_mat
-
-
-##################  IESR transformation version 03 ##################
-def tran_func3(ra, dec, r1, r2, r3, d1, d2, b2):
-    """Coordinate transformation function.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-    The difference between v03 and v03-00 is the defination of the slope
-    in the right ascension.
-
-    Parameters
-    ----------
-    ra/dec : array of float
-        right ascension/declination in radian
-    r1/r2/r3 : float
-        rotational angles around X-, Y-, and Z-axis
-    d1/d2 : float
-        two declination-dependent slopes in right ascension/declination
-    b2 : float
-        one bias in declination
-
-    Returns
-    -------
-    dra/ddec : array of float
-        R.A.(*cos(Dec.))/Dec. differences
-    """
-
-    dec0 = 0
-    delta_dec = dec - dec0
-
-    dra = [-r1 * cos(ra) * sin(dec) - r2 *
-           sin(ra) * sin(dec) + r3 * cos(dec)
-           + d1 * delta_dec][0]
-    ddec = [r1 * sin(ra) - r2 * cos(ra)
-            + d2 * delta_dec + b2][0]
-
-    return dra, ddec
-
-
-def jac_mat3(ra, dec):
-    """Calculate the Jacobian matrix.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-    The difference between v03 and v03-00 is the defination of the slope
-    in the right ascension.
-
-    Parameters
-    ----------
-    ra : array of float
-        right ascension in radian
-    dec : array of float
-        declination in radian
-
-    Returns
-    -------
-    jac_mat : Jacobian matrix
-    """
-
-    # Partial deviation of dra and ddec.
-    par11 = -sin(dec) * cos(ra)
-    par12 = sin(ra)
-    par21 = -sin(dec) * sin(ra)
-    par22 = -cos(ra)
-    par31 = cos(dec)
-    par32 = np.zeros_like(dec)
-    par41 = np.rad2deg(dec)  # unit: deg
-    par42 = np.zeros_like(dec)
-    par51 = np.zeros_like(dec)
-    par52 = np.rad2deg(dec)  # unit: deg
-    par61 = np.zeros_like(dec)
-    par62 = np.ones_like(dec)
-
-    par1 = concatenate((par11, par12))
-    par2 = concatenate((par21, par22))
-    par3 = concatenate((par31, par32))
-    par4 = concatenate((par41, par42))
-    par5 = concatenate((par51, par52))
-    par6 = concatenate((par61, par62))
-
-    # Jacobian matrix.
-    jac_mat = np.stack((par1, par2, par3, par4, par5, par6), axis=-1)
-
-    return jac_mat
-
-
-def solve_tran_neq3(dra, ddec, ra, dec,
-                    dra_err=None, ddec_err=None, corr=None):
-    """Solve normal equation.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-    The difference between v03 and v03-00 is the defination of the slope
-    in the right ascension.
-
-    Parameters
-    ----------
-    dra/ddec : array of float
-        offset in right ascension/declination
-    ra/dec : array of float
-        right ascension/declination in radian
-    dra_err/ddec_err : array of float
-        formal uncertainties of dra/ddec, default value is None
-    corr : array of float
-        correlation between dra and ddec, default value is None
-
-    Returns
-    -------
-    opt : array of (6,)
-        estimation of three rotational angles, two slopes, and one bias
-    sig : array of (6,)
-        formal uncertainty of estimations
-    corr_mat : array of (6,6)
-        correlation coefficients between estimations
-    """
-
-    # Jacobian matrix and its transpose.
-    jac_mat = jac_mat3(ra, dec)
-    jac_mat_t = np.transpose(jac_mat)
-
-    # Weighted matrix.
-    wgt_mat = calc_wgt_mat(dra_err, ddec_err, corr)
-
-    # Calculate matrix A and b of matrix equation:
-    # A * w = b.
-    mat_tmp = np.dot(jac_mat_t, wgt_mat)
-    A = np.dot(mat_tmp, jac_mat)
-    dpos = concatenate((dra, ddec))
-    b = np.dot(mat_tmp,  dpos)
-
-    # Solve the equations.
-    #  w = (r1, r2, r3, d1, d2, b2)^T
-    w = np.linalg.solve(A, b)
-
-    # Covariance.
-    cov_mat = np.linalg.inv(A)
-    sig, corr_mat = read_cov_mat(cov_mat)
-
-    # Return the result.
-    return w, sig, corr_mat
-
-
-def residual_calc3(dRA, dDE, RA, DE, param):
-    '''Calculate the residuals of RA/Dec
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)*cos(dec)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-    The difference between v03 and v03-00 is the defination of the slope
-    in the right ascension.
-
-    Parameters
-    ----------
-    dRA/dDE : array of float
-        differences in R.A.(*cos(Dec.))/Dec.
-    RA/DE : array of float
-        Right ascension/Declination in radian
-    param : array of float
-        estimation of three rotation angles, two slopes, and one bias
-
-    Returns
-    ----------
-    ResRA/ResDE : array of float
-        residual array of dRA(*cos(Dec))/dDec in uas.
-    '''
-
-    # Theoritical value
-    dra, ddec = tran_func3(RA, DE, *param)
-
-    # Calculate the residual. ( O - C )
-    ResRA, ResDE = dRA - dra, dDE - ddec
-
-    return ResRA, ResDE
-
-
-def tran_fitting3(dra, ddec, ra, dec,
-                  dra_err=None, ddec_err=None, corr_arr=None, flog=sys.stdout):
-    """Least square fitting of transformation equation.
-
-    The transformation equation considers a rigid rotation together with
-    two declination-dependent slopes and one declination bias, which could
-    be given by the following
-    d_RA^* = -r_x*sin(dec)*cos(ra) - r_y*sin(dec)*sin(ra) + r_z*cos(dec)
-             + D_1*(dec-DE0)*cos(dec)
-    d_DE   = +r_x*sin(ra)         - r_y*cos(ra)
-             + D_2*(dec-DE0) + B_2
-    where the reference declination is choosen as DE0 = 0.0.
-    The difference between v03 and v03-00 is the defination of the slope
-    in the right ascension.
-
-    Parameters
-    ----------
-    dra/ddec : array of float
-        offset in right ascension/declination
-    ra/dec : array of float
-        right ascension/declination in radian
-    dra_err/ddec_err : array of float
-        formal uncertainties of dra/ddec, default value is None
-    corr_arr : array of float
-        correlation between dra and ddec, default value is None
-
-    Returns
-    -------
-    opt : array of (6,)
-        estimation of three rotational angles, two slopes, and one bias
-    sig : array of (6,)
-        formal uncertainty of estimations
-    corr_mat : array of (6,6)
-        correlation coefficients between estimations
-    """
-
-    opt, sig, corr_mat = solve_tran_neq3(
-        dra, ddec, ra, dec, dra_err, ddec_err, corr_arr)
-
-    # Calculate the residual. ( O - C )
-    rsd_ra, rsd_dec = residual_calc3(dRA, dDE, RA, DE, opt)
-
-    if dra_err is None and ddec_err is None:
-        # Calculate the a priori reduced Chi-square
-        cov_arr = corr_arr * dra_err * ddec_err
-        apr_chi2 = calc_chi2_2d(
-            dra, dra_err, ddec, ddec_err, cov_arr, reduced=True)
-
-        # Calculate the post-fitting reduced Chi-square
-        M = opt.size
-        pos_chi2_rdc = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err,
-                                    cov_arr, reduced=True,
-                                    num_fdm=2*rsd_ra.size-1-M)
-
-        print("# apriori reduced Chi-square for: %10.3f\n"
-              "# posteriori reduced Chi-square for: %10.3f" %
-              (apr_chi2, pos_chi2_rdc), file=flog)
-
-        # Calculate the goodness-of-fit
-        pos_chi2 = calc_chi2_2d(rsd_ra, dra_err, rsd_ddec, ddec_err, cov_arr)
-        print("# goodness-of-fit is %10.3f" %
-              calc_gof(2*rsd_ra.size-1-M, pos_chi2), file=flog)
-
-        # Rescale the formal errors
-        sig = sig * np.sqrt(pos_chi2_rdc)
-
-    return opt, sig, corr_mat
+    return res
 
 
 def main():
